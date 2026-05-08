@@ -87,3 +87,16 @@ def test_fb_ad_chunks_carry_source_corpus_metadata():
     chunks = parse_fb_ad(FB_FIXTURE)
     for c in chunks:
         assert c.metadata.source_corpus == "fb_ad"
+
+
+MALFORMED_FIXTURE = Path(__file__).parent / "fixtures" / "malformed_advertorial.md"
+
+
+def test_lenient_fallback_recovers_top_level_scalars_from_malformed_yaml():
+    """Files with unquoted colons in scalars break strict yaml.safe_load.
+    The lenient fallback should still recover top-level fields like
+    hook_headline so we get at least one chunk per broken file."""
+    chunks = parse_advertorial(MALFORMED_FIXTURE)
+    hook_chunks = [c for c in chunks if c.chunk_type == "hook_headline"]
+    assert len(hook_chunks) == 1
+    assert "Shelters Switched" in hook_chunks[0].text

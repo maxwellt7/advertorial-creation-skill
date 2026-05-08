@@ -84,7 +84,7 @@ def main() -> int:
             }
             for c, vec in zip(batch, vectors)
         ]
-        index.upsert(records)
+        index.upsert(vectors=records)
         print(f"  upserted {i + len(batch)}/{len(chunks)}")
 
     print("Done.")
