@@ -34,9 +34,19 @@ def test_save_state_is_atomic(tmp_path: Path):
     run_dir = tmp_path / "run-003"
     state = init_run(run_dir, run_id="run-003")
     save_state(run_dir, state)
-    # No leftover temp files
-    leftovers = list(run_dir.glob("state.json.tmp*"))
+    # No leftover temp files (mkstemp uses prefix "state.json." with random suffix)
+    leftovers = [
+        f for f in run_dir.iterdir()
+        if f.name.startswith("state.json.") and f.name != "state.json"
+    ]
     assert leftovers == []
+
+
+def test_init_run_raises_when_state_already_exists(tmp_path: Path):
+    run_dir = tmp_path / "run-existing"
+    init_run(run_dir, run_id="run-existing")
+    with pytest.raises(FileExistsError):
+        init_run(run_dir, run_id="run-existing")
 
 
 def test_load_state_raises_on_missing(tmp_path: Path):

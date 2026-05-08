@@ -70,6 +70,10 @@ def _state_path(run_dir: Path) -> Path:
 
 def init_run(run_dir: Path, run_id: str, cost_ceiling_usd: float = 5.00) -> RunState:
     run_dir.mkdir(parents=True, exist_ok=True)
+    if _state_path(run_dir).exists():
+        raise FileExistsError(
+            f"Run already initialized at {run_dir}. Use load_state() to resume."
+        )
     state = RunState(
         run_id=run_id,
         created_at=datetime.now(timezone.utc).isoformat(),
