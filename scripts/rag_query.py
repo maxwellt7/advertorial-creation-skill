@@ -4,11 +4,16 @@ import os
 from functools import lru_cache
 from typing import Sequence
 
+from dotenv import load_dotenv
 from openai import OpenAI
 from pinecone import Pinecone
 from pydantic import BaseModel
 
+# Load env early so EMBED_DIM picks up any custom value from .env
+load_dotenv()
+
 EMBED_MODEL = "text-embedding-3-large"
+EMBED_DIM = int(os.environ.get("EMBEDDING_DIMENSIONS", "2048"))
 
 
 class RagResult(BaseModel):
@@ -33,7 +38,7 @@ def _get_openai() -> OpenAI:
 
 def _embed(text: str) -> list[float]:
     client = _get_openai()
-    resp = client.embeddings.create(model=EMBED_MODEL, input=[text])
+    resp = client.embeddings.create(model=EMBED_MODEL, input=[text], dimensions=EMBED_DIM)
     return resp.data[0].embedding
 
 

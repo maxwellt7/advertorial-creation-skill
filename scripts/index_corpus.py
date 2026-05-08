@@ -14,13 +14,16 @@ from pinecone import Pinecone, ServerlessSpec
 
 from scripts.corpus_chunker import Chunk, parse_advertorial, parse_fb_ad
 
+# Load env early so EMBED_DIM picks up any custom value from .env
+load_dotenv()
+
 EMBED_MODEL = "text-embedding-3-large"
-EMBED_DIM = 3072
+EMBED_DIM = int(os.environ.get("EMBEDDING_DIMENSIONS", "2048"))
 BATCH = 96
 
 
 def _embed_batch(client: OpenAI, texts: list[str]) -> list[list[float]]:
-    resp = client.embeddings.create(model=EMBED_MODEL, input=texts)
+    resp = client.embeddings.create(model=EMBED_MODEL, input=texts, dimensions=EMBED_DIM)
     return [d.embedding for d in resp.data]
 
 
@@ -55,7 +58,6 @@ def _gather_chunks(corpus_path: Path) -> list[Chunk]:
 
 
 def main() -> int:
-    load_dotenv()
     corpus_path = Path(os.environ["ADVERTORIAL_CORPUS_PATH"])
     index_name = os.environ.get("PINECONE_INDEX_NAME", "advertorial-corpus")
     region = os.environ.get("PINECONE_ENVIRONMENT", "us-east-1")
