@@ -85,3 +85,37 @@ def parse_advertorial(path: Path) -> list[Chunk]:
         chunks.append(Chunk(text=cta, chunk_type="cta_pattern", metadata=meta("cta_pattern")))
 
     return chunks
+
+
+def parse_fb_ad(path: Path) -> list[Chunk]:
+    data = _load_yaml_frontmatter(path)
+    chunks: list[Chunk] = []
+
+    def meta(chunk_type: ChunkType) -> ChunkMetadata:
+        return ChunkMetadata(
+            source_file=path.name,
+            chunk_type=chunk_type,
+            source_corpus="fb_ad",
+        )
+
+    if hook := data.get("primary_hook"):
+        chunks.append(Chunk(text=hook, chunk_type="fb_hook", metadata=meta("fb_hook")))
+
+    copy = data.get("copy") or {}
+    if headline := copy.get("headline"):
+        chunks.append(Chunk(text=headline, chunk_type="fb_headline", metadata=meta("fb_headline")))
+    if primary := copy.get("primary_text"):
+        chunks.append(Chunk(text=primary, chunk_type="fb_primary_text", metadata=meta("fb_primary_text")))
+
+    if img := data.get("reverse_engineered_image_prompt"):
+        chunks.append(Chunk(text=img, chunk_type="fb_image_prompt", metadata=meta("fb_image_prompt")))
+
+    voice = (data.get("voice_profile") or {}).get("example_sentences") or []
+    for sentence in voice:
+        if sentence:
+            chunks.append(Chunk(text=sentence, chunk_type="fb_voice_example", metadata=meta("fb_voice_example")))
+
+    if bridge := data.get("hook_to_advertorial_bridge"):
+        chunks.append(Chunk(text=bridge, chunk_type="fb_bridge", metadata=meta("fb_bridge")))
+
+    return chunks
