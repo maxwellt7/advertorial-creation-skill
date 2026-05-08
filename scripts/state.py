@@ -3,12 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field
+
+CURRENT_RUN_POINTER = Path.home() / ".advertorial-current-run"
 
 
 PhaseName = Literal[
@@ -102,3 +105,27 @@ def save_state(run_dir: Path, state: RunState) -> None:
     finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
+
+
+def generate_run_id(headline: str) -> str:
+    today = date.today().isoformat()
+    slug = re.sub(r"[^a-z0-9]+", "-", headline.lower()).strip("-")[:60]
+    return f"{today}-{slug}"
+
+
+def set_current_run(run_dir: Path) -> None:
+    CURRENT_RUN_POINTER.write_text(str(run_dir))
+
+
+def current_run_dir() -> Path:
+    if not CURRENT_RUN_POINTER.exists():
+        raise FileNotFoundError("No current run set. Start one with /advertorial new.")
+    return Path(CURRENT_RUN_POINTER.read_text().strip())
+
+
+def advance_phase(run_dir: Path, to_phase: PhaseName, status: RunStatus) -> RunState:
+    state = load_state(run_dir)
+    state.current_phase = to_phase
+    state.status = status
+    save_state(run_dir, state)
+    return state

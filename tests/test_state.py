@@ -79,3 +79,37 @@ def test_artifact_hash_change_detection(tmp_path: Path):
     artifact.write_text("v2 user-edited content")
     loaded = load_state(run_dir)
     assert loaded.artifact_changed_on_disk("copy.md", artifact) is True
+
+
+from scripts.state import (
+    advance_phase,
+    current_run_dir,
+    generate_run_id,
+    set_current_run,
+)
+
+
+def test_generate_run_id_is_url_safe():
+    rid = generate_run_id("Why Shelters Are Switching To These Pee Pads")
+    assert rid.startswith("2")
+    assert "/" not in rid
+    assert " " not in rid
+    assert rid.lower() == rid
+
+
+def test_current_run_pointer(tmp_path: Path, monkeypatch):
+    pointer = tmp_path / "current"
+    monkeypatch.setattr("scripts.state.CURRENT_RUN_POINTER", pointer)
+    target = tmp_path / "runs" / "abc"
+    target.mkdir(parents=True)
+    set_current_run(target)
+    assert current_run_dir() == target
+
+
+def test_advance_phase_transitions_status(tmp_path: Path):
+    run_dir = tmp_path / "run-advance"
+    init_run(run_dir, run_id="run-advance")
+    advance_phase(run_dir, to_phase="copy", status="awaiting_review")
+    state = load_state(run_dir)
+    assert state.current_phase == "copy"
+    assert state.status == "awaiting_review"
