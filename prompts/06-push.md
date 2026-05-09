@@ -24,48 +24,126 @@ print(f'OK: {len(payload.sections)} sections')
 "
 ```
 
-### Step 2: Upload images as Framer assets
+### Step 2: Discover the live Framer schema
 
-For each unique image referenced in the payload (parent.hero_image_local_path + every section.image_local_path that is non-null):
+Always start by calling `mcp__unframer__getCMSCollections` to get the current `advertorials` and `advertorial_sections` schemas. Field IDs and enum case IDs are auto-generated and may have changed since this prompt was written. Build a local map of `field_name → field_id` and `enum_value_name → case_id` for both collections.
 
-Use the unframer MCP tool to upload the asset. The exact tool and parameter shape depends on what's exposed by the MCP server. Check via `mcp__unframer__getProjectXml` or `mcp__unframer__createCodeFile` to discover the asset upload primitive.
+If a required field is missing (e.g., `byline_role`) or named differently (e.g., `layout_archetypes` plural in Framer vs `layout_archetype` singular in our payload), reconcile gracefully:
 
-If the unframer MCP exposes a dedicated asset endpoint, use it. If not, the fallback is to host the image at a public URL (e.g., upload to a static host) and reference that URL in the CMS row.
+- Field name mappings (apply when building upsert payloads):
+  - `layout_archetype` (payload) → `layout_archetypes` (Framer)
+- If a field doesn't exist on the Framer side, omit it from the upsert (do not error).
+- Do NOT send a `slug` field to the parent collection — Framer auto-generates the slug from the title field (`headline`) for routing. The payload's `slug` value is for our own deduplication tracking only.
 
-Record each upload's resulting Framer asset URL in `runs/<id>/asset-urls.json` as `{"<local_path>": "<framer_asset_url>"}`.
+### Step 3: Upload images as Framer assets
 
-### Step 3: Upsert parent CMS row
+For each unique image referenced in the payload (`parent.hero_image_local_path` plus every `section.image_local_path` that is non-null):
 
-Use `mcp__unframer__upsertCMSItem` with the `advertorials` collection.
-- Map every parent.* field to the corresponding CMS field.
-- Substitute hero_image_local_path with the asset URL from asset-urls.json.
-- Use parent.slug as the unique key for upsert idempotency.
+The unframer MCP does not expose a dedicated asset upload primitive surfaced in the tool list. Use this fallback path:
 
-### Step 4: Upsert each child section row
+```bash
+curl -F "reqtype=fileupload" -F "fileToUpload=@<absolute path to image>" https://catbox.moe/user/api.php
+```
 
-For each section in payload.sections (in order_index order):
+Catbox returns a public image URL. Record each mapping in `runs/<id>/asset-urls.json`:
 
-Use `mcp__unframer__upsertCMSItem` with the `advertorial_sections` collection.
-- Map every field. Substitute image_local_path with asset URL if non-null.
-- Use the composite key (parent_slug, order_index) as the unique upsert key.
+```json
+{
+  "<absolute local path>": "<public url returned by catbox>"
+}
+```
 
-### Step 5: Validate child count
+Image fields on Framer CMS items accept a public URL string directly as their value.
 
-`mcp__unframer__getCMSItems` on `advertorial_sections` filtered by parent_slug.
-Confirm count == len(payload.sections). If mismatch, log to push-result.md and warn user.
+### Step 4: Find or create the parent advertorials row
 
-### Step 6: Get the live URL
+Call `mcp__unframer__getCMSItems` for the `advertorials` collection. Search the returned items for one whose auto-generated slug matches `payload.parent.slug`. If matched, capture its `id` (this is the Framer-generated CMS item ID — we'll need it for child references and for idempotent updates).
 
-`mcp__unframer__getProjectWebsiteUrl` and compose the live URL: `<base_url>/advertorial/<slug>`.
+If no match exists, you'll create a new item in Step 5 and capture the new `id`.
 
-### Step 7: Write push-result.md
+### Step 5: Upsert the parent CMS row
+
+Build a `fieldData` object using the field IDs from Step 2's schema. The structure for each field follows Framer's typed value format:
+
+```json
+{
+  "<headline_field_id>":      { "type": "string",   "value": "<headline>" },
+  "<subhead_field_id>":       { "type": "string",   "value": "<subhead>" },
+  "<byline_name_field_id>":   { "type": "string",   "value": "<byline_name>" },
+  "<byline_role_field_id>":   { "type": "string",   "value": "<byline_role>" },
+  "<published_date_field_id>": { "type": "date",    "value": "<ISO 8601 date>" },
+  "<niche_field_id>":         { "type": "string",   "value": "<niche>" },
+  "<voice_archetype_field_id>": { "type": "string", "value": "<voice_archetype>" },
+  "<layout_archetypes_field_id>": { "type": "enum", "value": "<case ID matching layout_archetype name>" },
+  "<palette_primary_field_id>": { "type": "color", "value": "<hex>" },
+  "<palette_accent_field_id>": { "type": "color",  "value": "<hex>" },
+  "<palette_cta_field_id>":   { "type": "color",   "value": "<hex>" },
+  "<font_heading_field_id>":  { "type": "string",  "value": "<font name>" },
+  "<font_body_field_id>":     { "type": "string",  "value": "<font name>" },
+  "<hero_image_field_id>":    { "type": "image",   "value": "<public asset url>" },
+  "<final_cta_text_field_id>": { "type": "string", "value": "<cta text>" },
+  "<final_cta_url_field_id>": { "type": "link",    "value": "<cta url>" }
+}
+```
+
+For the enum value (`layout_archetypes`), translate the human-readable name (e.g., `product_review_listicle`) into Framer's enum case ID by looking it up in the schema returned by Step 2.
+
+Call `mcp__unframer__upsertCMSItem` with:
+- `collectionId`: the `advertorials` collection ID
+- `itemId`: the parent's existing item ID if found in Step 4, otherwise omit (Framer creates a new one)
+- `fieldData`: the object above
+
+Capture the response's item ID as `<parent_item_id>` — you'll use it for every child section.
+
+### Step 6: Find existing section rows
+
+Call `mcp__unframer__getCMSItems` for the `advertorial_sections` collection. Filter the returned items in code to those whose `parent_slug` (collectionReference) value equals `<parent_item_id>`. Build a map `order_index → existing_section_item_id` so you can update existing sections instead of creating duplicates.
+
+### Step 7: Upsert each child section row
+
+For each section in `payload.sections`, in `order_index` order:
+
+```json
+{
+  "<parent_slug_field_id>": { "type": "collectionReference", "value": "<parent_item_id>" },
+  "<order_index_field_id>": { "type": "number", "value": <order_index> },
+  "<section_type_field_id>": { "type": "enum", "value": "<case ID for this section_type>" },
+  "<heading_field_id>":     { "type": "string", "value": "<heading>" },
+  "<body_field_id>":        { "type": "formattedText", "value": "<body markdown>" },
+  "<image_field_id>":       { "type": "image", "value": "<public asset url or null>" },
+  "<cta_text_field_id>":    { "type": "string", "value": "<cta text or empty string>" },
+  "<cta_url_field_id>":     { "type": "link", "value": "<cta url or null>" },
+  "<design_emphasis_field_id>": { "type": "enum", "value": "<case ID for low/normal/high>" }
+}
+```
+
+Look up the section type's enum case ID in the schema (e.g., `numbered_reason` → `kzyxWbb4B`).
+
+Call `mcp__unframer__upsertCMSItem` with:
+- `collectionId`: the `advertorial_sections` collection ID
+- `itemId`: the existing section's item ID from Step 6's map (if `order_index` matches), otherwise omit
+- `fieldData`: the object above
+
+Track the result for each section. If any single section upsert fails, log the section index but continue with remaining sections.
+
+### Step 8: Validate child count
+
+After all section upserts, call `mcp__unframer__getCMSItems` again on `advertorial_sections`, filter by `parent_slug == <parent_item_id>`, and confirm the count equals `len(payload.sections)`. If mismatch, mark the push as partial.
+
+### Step 9: Get the live URL
+
+Call `mcp__unframer__getProjectWebsiteUrl`. If a published URL is returned, compose `<published_url>/advertorial/<auto_slug>`. If only staging is available, use staging. If neither exists, the user has not published the project yet — note this in `push-result.md` and remind them to publish.
+
+The `<auto_slug>` is the Framer-generated slug from the parent row's `headline`. It's typically a kebab-cased version of the headline (e.g., `why-shelters-are-switching-to-these-pee-pads`). Confirm by inspecting the parent item's slug in the response from Step 5.
+
+### Step 10: Write push-result.md
 
 ```yaml
 ---
-status: success | partial
-slug: "<slug>"
+status: success
+slug: "<auto-generated slug>"
+parent_item_id: "<parent_item_id>"
 live_url: "https://<project-domain>/advertorial/<slug>"
-parent_uploaded: true
 sections_uploaded: 8
 sections_expected: 8
 asset_uploads: 5
@@ -73,7 +151,9 @@ errors: []
 ---
 ```
 
-### Step 8: Update state
+If status is partial, list the failed steps and which sections failed by index.
+
+### Step 11: Update state
 
 ```bash
 python -c "
@@ -86,7 +166,7 @@ advance_phase(rd, 'complete', 'complete')
 "
 ```
 
-### Step 9: Report to user
+### Step 12: Report to user
 
 ```
 Live preview: https://<project-domain>/advertorial/<slug>
@@ -96,7 +176,9 @@ Run complete. Total cost: $X.XX.
 
 ## Failure handling
 
-- If asset upload fails: retry once, then stop. Mark `status: partial` in push-result.md. Tell user `/advertorial push` will resume.
-- If parent upsert fails: stop, do not attempt section upserts. Mark `status: partial`.
-- If a section upsert fails mid-batch: continue with remaining sections, mark partial, list the failed indexes in push-result.md.
-- Re-run after partial failure: idempotency on `slug` and `(parent_slug, order_index)` means rerunning is safe.
+- **Asset upload fails:** retry once, then stop. Mark `status: partial`. Tell user `/advertorial push` will resume.
+- **Schema discovery fails:** stop and tell user. Phase 6 cannot proceed without the live schema.
+- **Parent upsert fails:** stop, do not attempt section upserts. Mark `status: partial`.
+- **A section upsert fails mid-batch:** continue with remaining sections; mark partial; list failed indexes.
+- **Project not published (no production / staging URL):** push CMS rows successfully, but tell the user no live URL is available until they publish in Framer's UI.
+- **Re-run after partial failure:** idempotency on parent slug match (Step 4) and `(parent_item_id, order_index)` match (Step 6) means re-running is safe.
